@@ -1,0 +1,10 @@
+aiogram==3.17.0
+sqlalchemy==2.0.36
+alembic==1.14.1
+asyncpg==0.29.0
+python-dotenv==1.0.1
+gspread==6.2.0
+google-auth==2.27.0
+google-auth-oauthlib==1.2.0
+google-auth-httplib2==0.2.0
+pytz==2024.2
