@@ -2,7 +2,6 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from datetime import datetime
-import pytz
 from database.session import async_session_maker
 from database.dao import ReportDAO, EmployeeDAO
 from states.report import ReportStates
@@ -11,6 +10,7 @@ from services.google_sheets import GoogleSheetsService
 from keyboards.builder import get_main_menu, get_cancel_keyboard, get_confirmation_keyboard
 
 router = Router()
+
 
 @router.message(F.text == "📊 Заполнить отчет за сегодня")
 async def start_report(message: Message, employee, state: FSMContext):
@@ -32,6 +32,7 @@ async def start_report(message: Message, employee, state: FSMContext):
         reply_markup=get_cancel_keyboard()
     )
 
+
 @router.message(ReportStates.waiting_for_total_income)
 async def process_total_income(message: Message, state: FSMContext):
     if message.text == "❌ Отмена":
@@ -48,6 +49,7 @@ async def process_total_income(message: Message, state: FSMContext):
     await state.set_state(ReportStates.waiting_for_cash)
     await message.answer("Введите сумму наличными:")
 
+
 @router.message(ReportStates.waiting_for_cash)
 async def process_cash(message: Message, state: FSMContext):
     is_valid, amount = ReportValidator.validate_amount(message.text)
@@ -58,6 +60,7 @@ async def process_cash(message: Message, state: FSMContext):
     await state.update_data(cash=amount)
     await state.set_state(ReportStates.waiting_for_cashless)
     await message.answer("Введите сумму безналичными:")
+
 
 @router.message(ReportStates.waiting_for_cashless)
 async def process_cashless(message: Message, state: FSMContext):
@@ -70,6 +73,7 @@ async def process_cashless(message: Message, state: FSMContext):
     await state.set_state(ReportStates.waiting_for_cash_balance)
     await message.answer("Введите остаток в кассе:")
 
+
 @router.message(ReportStates.waiting_for_cash_balance)
 async def process_cash_balance(message: Message, state: FSMContext):
     is_valid, amount = ReportValidator.validate_amount(message.text)
@@ -80,6 +84,7 @@ async def process_cash_balance(message: Message, state: FSMContext):
     await state.update_data(cash_balance=amount)
     await state.set_state(ReportStates.waiting_for_clients_count)
     await message.answer("Введите количество клиентов:")
+
 
 @router.message(ReportStates.waiting_for_clients_count)
 async def process_clients_count(message: Message, state: FSMContext):
@@ -92,6 +97,7 @@ async def process_clients_count(message: Message, state: FSMContext):
     await state.set_state(ReportStates.waiting_for_cash_to_suppliers)
     await message.answer("Введите наличные поставщикам:")
 
+
 @router.message(ReportStates.waiting_for_cash_to_suppliers)
 async def process_cash_to_suppliers(message: Message, state: FSMContext):
     is_valid, amount = ReportValidator.validate_amount(message.text)
@@ -102,6 +108,7 @@ async def process_cash_to_suppliers(message: Message, state: FSMContext):
     await state.update_data(cash_to_suppliers=amount)
     await state.set_state(ReportStates.waiting_for_cashless_to_suppliers)
     await message.answer("Введите безнал поставщикам:")
+
 
 @router.message(ReportStates.waiting_for_cashless_to_suppliers)
 async def process_cashless_to_suppliers(message: Message, state: FSMContext):
@@ -138,6 +145,7 @@ async def process_cashless_to_suppliers(message: Message, state: FSMContext):
     await state.set_state(ReportStates.summary)
     await message.answer(summary, reply_markup=get_confirmation_keyboard())
 
+
 @router.callback_query(ReportStates.summary, F.data == "confirm_send")
 async def confirm_send(callback: CallbackQuery, employee, state: FSMContext):
     data = await state.get_data()
@@ -153,9 +161,12 @@ async def confirm_send(callback: CallbackQuery, employee, state: FSMContext):
         existing_report = await report_dao.get_employee_today_report(current_employee.id)
         version = existing_report.version + 1 if existing_report else 1
         
+        # Создаем datetime без часового пояса
+        report_date = datetime.utcnow()
+        
         # Создаем отчет
         report = await report_dao.create(
-            report_date=datetime.now(pytz.timezone('Europe/Moscow')),
+            report_date=report_date,
             total_income=data['total_income'],
             cash=data['cash'],
             cashless=data['cashless'],
@@ -169,32 +180,39 @@ async def confirm_send(callback: CallbackQuery, employee, state: FSMContext):
         )
         
         # Синхронизируем с Google Sheets
-        sheets_service = GoogleSheetsService()
-        await sheets_service.append_report({
-            'report_date': report.report_date,
-            'branch_name': current_employee.branch.name,
-            'employee_name': current_employee.full_name,
-            'total_income': report.total_income,
-            'cash': report.cash,
-            'cashless': report.cashless,
-            'cash_balance': report.cash_balance,
-            'clients_count': report.clients_count,
-            'cash_to_suppliers': report.cash_to_suppliers,
-            'cashless_to_suppliers': report.cashless_to_suppliers,
-            'version': report.version,
-            'created_at': report.created_at
-        })
+        try:
+            sheets_service = GoogleSheetsService()
+            await sheets_service.append_report({
+                'report_date': report.report_date,
+                'branch_name': current_employee.branch.name,
+                'employee_name': current_employee.full_name,
+                'total_income': report.total_income,
+                'cash': report.cash,
+                'cashless': report.cashless,
+                'cash_balance': report.cash_balance,
+                'clients_count': report.clients_count,
+                'cash_to_suppliers': report.cash_to_suppliers,
+                'cashless_to_suppliers': report.cashless_to_suppliers,
+                'version': report.version,
+                'created_at': report.created_at
+            })
+        except Exception as e:
+            # Если ошибка с Google Sheets, всё равно сохраняем отчет в БД
+            await callback.message.answer(
+                f"⚠️ Отчет сохранен в базу данных, но не синхронизирован с Google Sheets: {e}"
+            )
     
     await state.clear()
     await callback.message.edit_text(
         f"✅ Отчет успешно сохранен!\n"
         f"Версия: {version}\n"
-        f"Дата: {datetime.now(pytz.timezone('Europe/Moscow')).strftime('%Y-%m-%d')}"
+        f"Дата: {report_date.strftime('%Y-%m-%d %H:%M')}"
     )
     await callback.message.answer(
         "Главное меню:", 
         reply_markup=get_main_menu("employee")
     )
+
 
 @router.callback_query(ReportStates.summary, F.data == "confirm_edit")
 async def confirm_edit(callback: CallbackQuery, state: FSMContext):
@@ -202,6 +220,7 @@ async def confirm_edit(callback: CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
         "Редактирование отчета. Введите общий приход за день (сумма):"
     )
+
 
 @router.callback_query(ReportStates.summary, F.data == "confirm_restart")
 async def confirm_restart(callback: CallbackQuery, state: FSMContext):
@@ -211,9 +230,45 @@ async def confirm_restart(callback: CallbackQuery, state: FSMContext):
         "Начинаем заполнение заново. Введите общий приход за день (сумма):"
     )
 
+
 @router.message(F.text == "✏️ Исправить отчет за сегодня")
-async def edit_today_report(message: Message, employee):
-    await start_report(message, employee)
+async def edit_today_report(message: Message, employee, state: FSMContext):
+    async with async_session_maker() as session:
+        report_dao = ReportDAO(session)
+        existing_report = await report_dao.get_employee_today_report(employee.id)
+        
+        if not existing_report:
+            await message.answer("❌ У вас нет отчета за сегодня. Создайте новый отчет.")
+            return
+        
+        # Загружаем существующие данные в state
+        await state.update_data(
+            total_income=float(existing_report.total_income),
+            cash=float(existing_report.cash),
+            cashless=float(existing_report.cashless),
+            cash_balance=float(existing_report.cash_balance),
+            clients_count=int(existing_report.clients_count),
+            cash_to_suppliers=float(existing_report.cash_to_suppliers),
+            cashless_to_suppliers=float(existing_report.cashless_to_suppliers)
+        )
+        
+        await state.set_state(ReportStates.summary)
+        
+        # Показываем сводку с существующими данными
+        summary = (
+            f"📊 Редактирование отчета (версия {existing_report.version}):\n\n"
+            f"💰 Общий приход: {existing_report.total_income}\n"
+            f"💵 Наличные: {existing_report.cash}\n"
+            f"💳 Безналичные: {existing_report.cashless}\n"
+            f"🏦 Остаток в кассе: {existing_report.cash_balance}\n"
+            f"👥 Клиентов: {existing_report.clients_count}\n"
+            f"📤 Наличные поставщикам: {existing_report.cash_to_suppliers}\n"
+            f"📥 Безнал поставщикам: {existing_report.cashless_to_suppliers}\n\n"
+            f"Редактируем данные?"
+        )
+        
+        await message.answer(summary, reply_markup=get_confirmation_keyboard())
+
 
 @router.message(F.text == "📋 Мои последние отчеты")
 async def show_my_reports(message: Message, employee):
@@ -228,7 +283,7 @@ async def show_my_reports(message: Message, employee):
         response = "📋 Ваши последние отчеты:\n\n"
         for report in reports:
             response += (
-                f"📅 {report.report_date.strftime('%d.%m.%Y')} "
+                f"📅 {report.report_date.strftime('%d.%m.%Y %H:%M')} "
                 f"(v{report.version})\n"
                 f"💰 Приход: {report.total_income}\n"
                 f"👥 Клиентов: {report.clients_count}\n"

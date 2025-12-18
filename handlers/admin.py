@@ -210,7 +210,7 @@ async def process_branch_name(message: Message, state: FSMContext):
         new_branch = await branch_dao.create(branch_name)
         
         # Синхронизируем с Google Sheets
-        sheets_service = GoogleSheetsService()
+        #sheets_service = GoogleSheetsService()
         branches_list = await branch_dao.get_all()
         branches_data = []
         for branch in branches_list:
@@ -219,7 +219,7 @@ async def process_branch_name(message: Message, state: FSMContext):
                 'name': branch.name,
                 'created_at': branch.created_at
             })
-        await sheets_service.sync_branches(branches_data)
+        #await sheets_service.sync_branches(branches_data)
     
     await state.clear()
     await message.answer(f"✅ Филиал '{new_branch.name}' успешно добавлен!")
